@@ -18,6 +18,9 @@ pub fn toggle_lock(
     lambda_lock: f64,
     duration_limit: Duration,
 ) -> (u64, Duration) {
+    // Each task should be significantly heavier than the control flow overhead
+    const TASK_INNER_LOOP: usize = 128;
+
     let mut tasks_done: u64 = 0;
     let start = Instant::now();
     let mut action = 0;
@@ -35,7 +38,11 @@ pub fn toggle_lock(
                 tasks_done += tasks as u64;
                 let _guard = lock.lock().unwrap();
                 for _ in 0..tasks {
-                    black_box(rng.gen::<usize>());
+                    for _ in 0..TASK_INNER_LOOP {
+                        black_box(duration_until_next_event(lambda_unlock));
+                        black_box(duration_until_next_event(lambda_lock));
+                        black_box(rng.gen::<usize>());
+                    }
                 }
                 action = 1;
             }
@@ -44,7 +51,11 @@ pub fn toggle_lock(
                 let tasks = (duration_until_next_event(lambda_lock) + 0.5) as usize;
                 tasks_done += tasks as u64;
                 for _ in 0..tasks {
-                    black_box(rng.gen::<usize>());
+                    for _ in 0..TASK_INNER_LOOP {
+                        black_box(duration_until_next_event(lambda_unlock));
+                        black_box(duration_until_next_event(lambda_lock));
+                        black_box(rng.gen::<usize>());
+                    }
                 }
                 action = 0;
             }
@@ -78,9 +89,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_thread_never_lock() {
-        let lambda_unlock = 1.0 / 1.0; // On average, unlock once every task
-        let lambda_lock = 1.0 / 10000000.0; // On average, rarely lock
+    fn one_thread_rarely_lock() {
+        let lambda_unlock = 1.0 / 2.0; // On average, unlock once every task
+        let lambda_lock = 1.0 / 10000.0; // On average, rarely lock
         let duration_limit = Duration::from_secs(3);
         let lock = Arc::new(Mutex::new(()));
 
@@ -114,6 +125,25 @@ mod tests {
         let duration_limit = Duration::from_secs(3);
         let lock = Arc::new(Mutex::new(()));
         let threads = 2;
+
+        let res = toggle_lock_parallel(&lock, lambda_unlock, lambda_lock, duration_limit, threads);
+
+        for (tasks, duration) in res {
+            println!("Tasks: {tasks}");
+            println!("Duration: {:.02} s", duration.as_secs_f64());
+            let tasks_per_sec = tasks as f64 / duration.as_secs_f64();
+            println!("Tasks/sec: {:.02}", tasks_per_sec);
+            println!();
+        }
+    }
+
+    #[test]
+    fn four_threads() {
+        let lambda_unlock = 1.0 / 2.0; // On average, unlock once every two tasks
+        let lambda_lock = 1.0 / 2.0; // On average, lock once every two tasks
+        let duration_limit = Duration::from_secs(3);
+        let lock = Arc::new(Mutex::new(()));
+        let threads = 4;
 
         let res = toggle_lock_parallel(&lock, lambda_unlock, lambda_lock, duration_limit, threads);
 
